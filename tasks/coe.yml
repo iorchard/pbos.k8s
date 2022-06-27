@@ -1,0 +1,40 @@
+---
+- name: CoE | create cluster template
+  openstack.cloud.coe_cluster_template:
+    cloud: pbos
+    name: "{{ k8s_cluster_name }}-template"
+    coe: kubernetes
+    image_id: fcos
+    keypair_id: "{{ k8s_template.keypair_id }}"
+    network_driver: "{{ k8s_template.network_driver }}"
+    master_flavor_id: "{{ master_flavor_id }}"
+    flavor_id: "{{ node_flavor_id }}"
+    volume_driver: "{{ k8s_template.volume_driver }}"
+    dns_nameserver: "{{ k8s_template.dns_nameserver }}"
+    external_network_id: "{{ k8s_template.external_network_id }}"
+    master_lb_enabled: "{{ k8s_template.master_lb_enabled }}"
+    floating_ip_enabled: "{{ k8s_template.floating_ip_enabled }}"
+    labels: "{{ k8s_template.labels }}"
+    interface: internal
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: CoE | check k8s cluster exists.
+  ansible.builtin.command: >-
+    openstack coe cluster show -c status -f value {{ k8s_cluster_name }}
+  register: result
+  changed_when: false
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: CoE | create cluster
+  openstack.cloud.coe_cluster:
+    cloud: pbos
+    name: "{{ k8s_cluster_name }}"
+    cluster_template_id: "{{ k8s_cluster_name }}-template"
+    master_count: "{{ k8s_cluster.master_count }}"
+    node_count: "{{ k8s_cluster.node_count }}"
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+  when: result.rc != 0
+...

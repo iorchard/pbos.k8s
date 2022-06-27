@@ -1,0 +1,116 @@
+---
+- name: Setup | check fedora coreos image exists.
+  ansible.builtin.stat:
+    path: "/tmp/fcos.qcow2"
+  register: fcos_qcow2_file
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Setup | download fedora coreos image
+  ansible.builtin.get_url:
+    url: "{{ k8s_image_url }}"
+    dest: "/tmp/fcos.qcow2.xz"
+    mode: "0644"
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+  when: not fcos_qcow2_file.stat.exists
+
+- name: Setup | unarchive the image
+  ansible.builtin.command:
+    cmd: unxz fcos.qcow2.xz
+    chdir: /tmp
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+  when: not fcos_qcow2_file.stat.exists
+
+- name: Setup | create fedora coreos image
+  openstack.cloud.image:
+    cloud: pbos
+    name: fcos
+    disk_format: qcow2
+    container_format: bare
+    filename: "/tmp/fcos.qcow2"
+    properties: "{{ k8s_image_properties }}"
+    state: present
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Setup | create flavors
+  openstack.cloud.compute_flavor:
+    cloud: pbos
+    name: "{{ item.name }}"
+    vcpus: "{{ item.vcpus }}"
+    ram: "{{ item.ram }}"
+    disk: "{{ item.disk }}"
+    is_public: true
+    state: present
+  loop: "{{ k8s_flavors }}"
+  register: f
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Setup | set fact for master flavor id
+  ansible.builtin.set_fact:
+    master_flavor_id: "{{ f.results | json_query(\"[?flavor.name=='k8s.master'].id\") | join('') }}"
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Setup | set fact for node flavor id
+  ansible.builtin.set_fact:
+    node_flavor_id: "{{ f.results | json_query(\"[?flavor.name=='k8s.node'].id\") | join('') }}"
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Setup | debug
+  ansible.builtin.debug:
+    msg: |
+      master: {{ master_flavor_id }} / node: {{ node_flavor_id }}
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Setup | create ssh key directory
+  ansible.builtin.file:
+    path: "{{ k8s_sshkey_dir }}"
+    state: directory
+    mode: "0700"
+
+- name: Setup | create ssh keys on the first node
+  community.crypto.openssh_keypair:
+    path: "{{ k8s_sshkey_dir }}/{{ k8s_cluster_name }}_key"
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Setup | get public ssh key from the first node
+  ansible.builtin.slurp:
+    src: "{{ k8s_sshkey_dir }}/{{ k8s_cluster_name }}_key.pub"
+  register: ssh_public_key
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Setup | get private ssh key from the first node
+  ansible.builtin.slurp:
+    src: "{{ k8s_sshkey_dir }}/{{ k8s_cluster_name }}_key"
+  register: ssh_private_key
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Setup | create ssh keypair on other nodes
+  ansible.builtin.copy:
+    dest: "{{ k8s_sshkey_dir }}/{{ item.name }}"
+    content: "{{ item.content }}"
+    mode: "{{ item.mode }}"
+  no_log: true
+  loop:
+    - {name: "{{ k8s_cluster_name }}_key.pub", content: "{{ ssh_public_key.content | b64decode }}", mode: "0644"}
+    - {name: "{{ k8s_cluster_name }}_key", content: "{{ ssh_private_key.content | b64decode }}", mode: "0600"}
+  when: inventory_hostname != groups['controller'][0]
+
+- name: Setup | create openstack key pair
+  openstack.cloud.keypair:
+    cloud: pbos
+    name: "{{ k8s_cluster_name }}_key"
+    state: present
+    public_key_file: "{{ k8s_sshkey_dir }}/{{ k8s_cluster_name }}_key.pub"
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+...

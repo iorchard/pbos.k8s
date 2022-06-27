@@ -1,0 +1,159 @@
+---
+- name: Bastion | check bastion image exists
+  ansible.builtin.stat:
+    path: "/tmp/{{ bastion.image_name }}"
+  register: image_result
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | download bastion image
+  ansible.builtin.get_url:
+    url: "{{ bastion.image_url }}"
+    dest: "/tmp/{{ bastion.image_name }}"
+    mode: "0644"
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+  when: not image_result.stat.exists
+
+- name: Bastion | create bastion image
+  openstack.cloud.image:
+    cloud: pbos
+    name: "{{ bastion.image_name }}"
+    disk_format: "{{ bastion.image_disk_format }}"
+    container_format: bare
+    filename: "/tmp/{{ bastion.image_name }}"
+    properties: "{{ bastion.image_properties }}"
+    state: present
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | create security group
+  openstack.cloud.security_group:
+    cloud: pbos
+    state: present
+    name: "{{ bastion.secgroup }}"
+    description: security group for bastion server
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | create security group rules
+  openstack.cloud.security_group_rule:
+    cloud: pbos
+    state: present
+    security_group: "{{ bastion.secgroup }}"
+    protocol: "{{ item.protocol }}"
+    port_range_min: "{{ item.port_range_min }}"
+    port_range_max: "{{ item.port_range_max }}"
+    remote_ip_prefix: "{{ item.remote_ip_prefix }}"
+  loop: "{{ bastion.secgroup_rules }}"
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | create flavor
+  openstack.cloud.compute_flavor:
+    cloud: pbos
+    state: present
+    name: "{{ bastion.flavor.name }}"
+    vcpus: "{{ bastion.flavor.vcpus }}"
+    ram: "{{ bastion.flavor.ram }}"
+    disk: "{{ bastion.flavor.disk }}"
+    is_public: false
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | get network id of cluster
+  openstack.cloud.networks_info:
+    cloud: pbos
+    name: "{{ k8s_cluster_name }}"
+  register: network_result
+  until: (network_result.openstack_networks | length) != 0
+  retries: 10
+  delay: 10
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | create public adminrc
+  ansible.builtin.template:
+    dest: "{{ ansible_env.HOME }}/.adminrc_public"
+    src: "adminrc_public.j2"
+    mode: "0600"
+
+- name: Bastion | get public adminrc
+  ansible.builtin.slurp:
+    src: "{{ ansible_env.HOME }}/.adminrc_public"
+  register: adminrc_public
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | create bastion instance
+  openstack.cloud.server:
+    cloud: pbos
+    state: present
+    name: "{{ bastion.name }}"
+    image: "{{ bastion.image_name }}"
+    key_name: "{{ bastion.key_name }}"
+    timeout: 300
+    flavor: "{{ bastion.flavor.name }}"
+    security_groups: "{{ bastion.secgroup }}"
+    nics:
+      - net-id: "{{ network_result.openstack_networks[0].id }}"
+    auto_ip: true
+    userdata: |
+      #cloud-config
+      timezone: {{ bastion.timezone }}
+      bootcmd:
+        - DEBIAN_FRONTEND=noninteractive apt-get -q=2 update
+        - DEBIAN_FRONTEND=noninteractive apt-get -q=2 install gnupg
+      apt:
+        preseve_sources_list: false
+        primary:
+        - arches:
+          - amd64
+          uri: 'http://ftp.kr.debian.org/debian'
+        security:
+        - arches:
+          - amd64
+          uri: 'http://security.debian.org/debian-security'
+        sources_list: |
+          deb $PRIMARY $RELEASE main
+          deb $PRIMARY $RELEASE-updates main
+          deb $SECURITY $RELEASE-security main
+        sources:
+          openstack:
+            keyid: '0FB8E8DD19498FEC90B25E5E56056AB2FEE4EECB'
+            keyserver: 'http://osbpo.debian.net/osbpo/dists/pubkey.gpg'
+            source: 'deb http://osbpo.debian.net/osbpo $RELEASE-{{ openstack_release }}-backports main'
+            filename: openstack.list
+          openstack-nochange:
+            source: 'deb http://osbpo.debian.net/osbpo $RELEASE-{{ openstack_release }}-backports-nochange main'
+            filename: openstack.list
+      packages:
+        - python3-openstackclient
+        - python3-barbicanclient
+        - python3-heatclient
+        - python3-magnumclient
+        - python3-octaviaclient
+      package_update: true
+      write_files:
+      - path: /root/.ssh/id_rsa
+        content: |
+          {{ ssh_private_key.content | b64decode | indent(width=4) }}
+        permissions: '0400'
+        owner: 'root:root'
+      - path: /root/.adminrc
+        content: |
+          {{ adminrc_public.content | b64decode | indent(width=4) }}
+        permissions: '0600'
+      runcmd:
+        - [ curl, -Lo, /usr/bin/kubectl, https://storage.googleapis.com/kubernetes-release/release/v{{ k8s_ver }}/bin/linux/amd64/kubectl ]
+        - [ curl, -Lo, /tmp/helm.tar.gz, https://get.helm.sh/helm-v{{ helm_ver }}-linux-amd64.tar.gz ]
+        - [ tar, -C, /tmp, -xzf, /tmp/helm.tar.gz ]
+        - [ cp, /tmp/linux-amd64/helm, /usr/bin/helm ]
+        - [ chmod, '0755', /usr/bin/kubectl ]
+        - [ sh, -c, "echo 'source .adminrc' >> /root/.bashrc" ]
+        - [ mkdir, /root/.kube ]
+        - [ sh, -c, ". /root/.adminrc && openstack coe cluster config --dir=/root/.kube {{ k8s_cluster_name }}" ]
+        - [ chmod, '0400', /root/.kube/config ]
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+...

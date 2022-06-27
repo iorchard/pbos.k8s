@@ -1,0 +1,52 @@
+---
+offline: false
+k8s_cluster_name: "cloudpc"
+k8s_sshkey_dir: "{{ ansible_env.HOME }}/.{{ k8s_cluster_name }}"
+k8s_image_url: "https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/33.20210426.3.0/x86_64/fedora-coreos-33.20210426.3.0-openstack.x86_64.qcow2.xz"
+k8s_image_properties:
+  os_distro: 'fedora-coreos'
+k8s_flavors:
+  - {role: 'master', name: 'k8s.master', vcpus: 4, ram: 4096, disk: 50}
+  - {role: 'node', name: 'k8s.node', vcpus: 8, ram: 4096, disk: 50}
+k8s_ver: 1.21.11
+other_ver: 1.21.0
+helm_ver: 3.8.1
+k8s_template:
+  image_id: fcos
+  keypair_id: "{{ k8s_cluster_name }}_key"
+  network_driver: calico
+  volume_driver: cinder
+  dns_nameserver: 8.8.8.8
+  external_network_id: public-net
+  master_lb_enabled: true
+  floating_ip_enabled: false
+  labels: "container_runtime=containerd,selinux_mode=disabled,use_podman=true,helm_client_url=https://get.helm.sh/helm-v{{ helm_ver }}-linux-amd64.tar.gz,helm_client_tag=v{{ helm_ver }},helm_client_sha256=d643f48fe28eeb47ff68a1a7a26fc5142f348d02c8bc38d699674016716f61cd,master_lb_floating_ip_enabled=true,boot_volume_size=50,boot_volume_type=ceph,etcd_volume_size=10,etcd_volume_type=ceph,cinder_csi_enabled=true,cinder_csi_plugin_tag=v{{ other_ver }},cloud_provider_enabled=true,cloud_provider_tag=v{{ other_ver }},k8s_keystone_auth_tag=v{{ other_ver }},keystone_auth_enabled=true,kube_tag=v{{ k8s_ver }}-rancher1,hyperkube_prefix=docker.io/rancher/,ingress_controller=octavia,octavia_ingress_controller_tag=v{{ other_ver }},kube_dashboard_enabled=false"
+
+k8s_cluster:
+  master_count: 1
+  node_count: 1
+
+bastion:
+  name: cloudpc-bastion
+  timezone: "Asia/Seoul"
+  image_name: cloudpc-bastion
+  image_url: "https://cloud.debian.org/images/cloud/bullseye/latest/debian-11-genericcloud-amd64.raw"
+  image_disk_format: "raw"
+  image_properties:
+    os_type: linux
+    os_distro: debian
+    os_admin_user: debian
+    hw_disk_bus: scsi
+    hw_scsi_model: virtio-scsi
+  key_name: "{{ k8s_cluster_name }}_key"
+  flavor: 
+    name: bastion
+    vcpus: 1
+    ram: 512
+    disk: 2
+  secgroup: "bastion-secgroup"
+  secgroup_rules:
+    - {protocol: icmp, port_range_min: -1, port_range_max: -1, remote_ip_prefix: "{{ ntp_allowed_cidr }}"}
+    - {protocol: tcp, port_range_min: 22, port_range_max: 22, remote_ip_prefix: "{{ ntp_allowed_cidr }}"}
+keystone_port: 5000
+...
