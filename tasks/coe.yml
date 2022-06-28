@@ -24,6 +24,7 @@
     openstack coe cluster show -c status -f value {{ k8s_cluster_name }}
   register: result
   changed_when: false
+  failed_when: result.rc in [0, 1]
   delegate_to: "{{ groups['controller'][0] }}"
   run_once: true
 
