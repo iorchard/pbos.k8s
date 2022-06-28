@@ -46,7 +46,7 @@ bastion:
     disk: 2
   secgroup: "bastion-secgroup"
   secgroup_rules:
-    - {protocol: icmp, port_range_min: -1, port_range_max: -1, remote_ip_prefix: "{{ ntp_allowed_cidr }}"}
-    - {protocol: tcp, port_range_min: 22, port_range_max: 22, remote_ip_prefix: "{{ ntp_allowed_cidr }}"}
+    - {protocol: icmp, port_range_min: -1, port_range_max: -1, remote_ip_prefix: "0.0.0.0/0"}
+    - {protocol: tcp, port_range_min: 22, port_range_max: 22, remote_ip_prefix: "0.0.0.0/0"}
 keystone_port: 5000
 ...
