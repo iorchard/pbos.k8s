@@ -1,4 +1,13 @@
 ---
+- name: CoE | check k8s cluster template exists.
+  ansible.builtin.command: >-
+    openstack coe cluster show -c name -f value {{ k8s_cluster_name }}-template
+  register: result
+  changed_when: false
+  failed_when: result.rc in [0, 1]
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
 - name: CoE | create cluster template
   openstack.cloud.coe_cluster_template:
     cloud: pbos
@@ -18,6 +27,7 @@
     interface: internal
   delegate_to: "{{ groups['controller'][0] }}"
   run_once: true
+  when: result.rc != 0
 
 - name: CoE | check k8s cluster exists.
   ansible.builtin.command: >-
