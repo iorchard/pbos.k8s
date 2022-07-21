@@ -17,11 +17,17 @@
         - "."
 
 - name: Main | include setup tasks
-  ansible.builtin.include_tasks: "setup.yml"
+  ansible.builtin.import_tasks: "setup.yml"
+  tags:
+    - setup
 
 - name: Main | include coe tasks
-  ansible.builtin.include_tasks: "coe.yml"
+  ansible.builtin.import_tasks: "coe.yml"
+  tags:
+    - coe
 
 - name: Main | include bastion tasks
-  ansible.builtin.include_tasks: "bastion.yml"
+  ansible.builtin.import_tasks: "bastion.yml"
+  tags:
+    - bastion
 ...

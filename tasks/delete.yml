@@ -1,40 +1,51 @@
 ---
 - name: Delete | import common tasks
   tags:
-    - magnum
+    - k8s
     - openstack
   ansible.builtin.import_tasks: "common.yml"
 
-- name: Delete | remove packages
+- name: Delete | delete bastion host if exists
   tags:
-    - magnum
+    - k8s
     - openstack
-  ansible.builtin.package:
-    name: "{{ item }}"
+  openstack.cloud.server:
+    cloud: "{{ os_cloud }}"
+    name: "{{ bastion.name }}"
     state: absent
-  loop: "{{ packages }}"
-  become: true
+  when: enable_bastion
 
-- name: DB | delete database
+- name: Delete | tear down k8s cluster
   tags:
-    - magnum
+    - k8s
     - openstack
-  community.mysql.mysql_db:
-    login_unix_socket: "{{ mariadb_service_socket }}"
-    login_user: "root"
-    login_password: "{{ mariadb_root_password }}"
-    name: "{{ os_service_name }}"
+  openstack.cloud.coe_cluster:
+    cloud: "{{ os_cloud }}"
+    name: "{{ k8s_cluster_name }}"
+    cluster_template_id: "{{ k8s_cluster_name }}-template"
     state: absent
-  delegate_to: "{{ groups['mariadb'][0] }}"
-  run_once: true
-  no_log: true
 
-- name: Delete | delete config directory
+- name: Delete | check k8s cluster is deleted
   tags:
-    - magnum
+    - k8s
     - openstack
-  ansible.builtin.file:
-    path: "{{ os_conf_dir }}"
+  ansible.builtin.command: >-
+    openstack --os-cloud={{ os_cloud }} coe cluster show {{ k8s_cluster_name }} -c uuid -f value
+  changed_when: false
+  register: result
+  failed_when: result.rc not in [0, 1]
+  until: result.rc != 0
+  retries: 60
+  delay: 10
+
+- name: Delete | delete cluster template
+  tags:
+    - k8s
+    - openstack
+  openstack.cloud.coe_cluster_template:
+    cloud: "{{ os_cloud }}"
+    coe: kubernetes
+    image_id: fcos
+    name: "{{ k8s_cluster_name }}-template"
     state: absent
-  become: true
 ...

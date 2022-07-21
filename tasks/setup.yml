@@ -35,6 +35,19 @@
   delegate_to: "{{ groups['controller'][0] }}"
   run_once: true
 
+- name: Setup | create host aggregate
+  openstack.cloud.host_aggregate:
+    cloud: pbos
+    state: present
+    name: "{{ k8s_agg.name }}"
+    availability_zone: "{{ k8s_agg.name }}"
+    hosts: "{{ k8s_agg.hosts }}"
+    metadata:
+      k8s: "true"
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+  when: k8s_agg.name != 'nova'
+
 - name: Setup | create flavors
   openstack.cloud.compute_flavor:
     cloud: pbos
@@ -43,8 +56,10 @@
     ram: "{{ item.ram }}"
     disk: "{{ item.disk }}"
     is_public: true
+    extra_specs:
+      "aggregate_instance_extra_specs:k8s": "true"
     state: present
-  loop: "{{ k8s_flavors }}"
+  loop: "{{ k8s_cluster.flavors }}"
   register: f
   delegate_to: "{{ groups['controller'][0] }}"
   run_once: true
@@ -61,12 +76,8 @@
   delegate_to: "{{ groups['controller'][0] }}"
   run_once: true
 
-- name: Setup | debug
-  ansible.builtin.debug:
-    msg: |
-      master: {{ master_flavor_id }} / node: {{ node_flavor_id }}
-  delegate_to: "{{ groups['controller'][0] }}"
-  run_once: true
+- name: Setup | include project/user tasks
+  ansible.builtin.include_tasks: project_user.yml
 
 - name: Setup | create ssh key directory
   ansible.builtin.file:
@@ -107,7 +118,7 @@
 
 - name: Setup | create openstack key pair
   openstack.cloud.keypair:
-    cloud: pbos
+    cloud: "{{ os_cloud }}"
     name: "{{ k8s_cluster_name }}_key"
     state: present
     public_key_file: "{{ k8s_sshkey_dir }}/{{ k8s_cluster_name }}_key.pub"

@@ -17,7 +17,7 @@
 
 - name: Bastion | create bastion image
   openstack.cloud.image:
-    cloud: pbos
+    cloud: "{{ os_cloud }}"
     name: "{{ bastion.image_name }}"
     disk_format: "{{ bastion.image_disk_format }}"
     container_format: bare
@@ -29,7 +29,7 @@
 
 - name: Bastion | create security group
   openstack.cloud.security_group:
-    cloud: pbos
+    cloud: "{{ os_cloud }}"
     state: present
     name: "{{ bastion.secgroup }}"
     description: security group for bastion server
@@ -38,7 +38,7 @@
 
 - name: Bastion | create security group rules
   openstack.cloud.security_group_rule:
-    cloud: pbos
+    cloud: "{{ os_cloud }}"
     state: present
     security_group: "{{ bastion.secgroup }}"
     protocol: "{{ item.protocol }}"
@@ -51,19 +51,50 @@
 
 - name: Bastion | create flavor
   openstack.cloud.compute_flavor:
-    cloud: pbos
+    cloud: "{{ os_cloud }}"
     state: present
     name: "{{ bastion.flavor.name }}"
     vcpus: "{{ bastion.flavor.vcpus }}"
     ram: "{{ bastion.flavor.ram }}"
     disk: "{{ bastion.flavor.disk }}"
     is_public: false
+    extra_specs:
+      "aggregate_instance_extra_specs:k8s": "true"
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | templating post_install yaml manifest
+  ansible.builtin.template:
+    dest: "{{ ansible_env.HOME }}/.{{ k8s_cluster_name }}.post_install.yml"
+    src: "post_install.yml.j2"
+    mode: "0600"
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | read post_install yaml
+  ansible.builtin.slurp:
+    src: "{{ ansible_env.HOME }}/.{{ k8s_cluster_name }}.post_install.yml"
+  register: post_install
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | read public adminrc
+  ansible.builtin.slurp:
+    src: "{{ ansible_env.HOME }}/.{{ k8s_cluster_name }}.adminrc"
+  register: adminrc_public
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | read public memberrc
+  ansible.builtin.slurp:
+    src: "{{ ansible_env.HOME }}/.{{ k8s_cluster_name }}.memberrc"
+  register: memberrc_public
   delegate_to: "{{ groups['controller'][0] }}"
   run_once: true
 
 - name: Bastion | get network id of cluster
   openstack.cloud.networks_info:
-    cloud: pbos
+    cloud: "{{ os_cloud }}"
     name: "{{ k8s_cluster_name }}"
   register: network_result
   until: (network_result.openstack_networks | length) != 0
@@ -72,25 +103,25 @@
   delegate_to: "{{ groups['controller'][0] }}"
   run_once: true
 
-- name: Bastion | create public adminrc
-  ansible.builtin.template:
-    dest: "{{ ansible_env.HOME }}/.adminrc_public"
-    src: "adminrc_public.j2"
-    mode: "0600"
-
-- name: Bastion | get public adminrc
-  ansible.builtin.slurp:
-    src: "{{ ansible_env.HOME }}/.adminrc_public"
-  register: adminrc_public
+- name: Bastion | check k8s cluster status.
+  ansible.builtin.command: >-
+    openstack --os-cloud={{ os_cloud }} coe cluster show {{ k8s_cluster_name }} -c status -f value
+  changed_when: false
+  register: cluster_status
+  until: cluster_status.stdout == 'CREATE_COMPLETE'
+  retries: 60
+  delay: 30
   delegate_to: "{{ groups['controller'][0] }}"
   run_once: true
 
 - name: Bastion | create bastion instance
   openstack.cloud.server:
-    cloud: pbos
+    cloud: "{{ os_cloud  }}"
     state: present
     name: "{{ bastion.name }}"
     image: "{{ bastion.image_name }}"
+    boot_from_volume: true
+    volume_size: 80
     key_name: "{{ bastion.key_name }}"
     timeout: 300
     flavor: "{{ bastion.flavor.name }}"
@@ -135,25 +166,36 @@
         - python3-octaviaclient
       package_update: true
       write_files:
-      - path: /root/.ssh/id_rsa
+      - path: /home/debian/.ssh/id_rsa
         content: |
           {{ ssh_private_key.content | b64decode | indent(width=4) }}
         permissions: '0400'
-        owner: 'root:root'
-      - path: /root/.adminrc
+      - path: /home/debian/.adminrc
         content: |
           {{ adminrc_public.content | b64decode | indent(width=4) }}
         permissions: '0600'
+      - path: /home/debian/.memberrc
+        content: |
+          {{ memberrc_public.content | b64decode | indent(width=4) }}
+        permissions: '0600'
+      - path: /home/debian/post_install.yml
+        content: |
+          {{ post_install.content | b64decode | indent(width=4) }}
+        permissions: '0400'
       runcmd:
         - [ curl, -Lo, /usr/bin/kubectl, https://storage.googleapis.com/kubernetes-release/release/v{{ k8s_ver }}/bin/linux/amd64/kubectl ]
         - [ curl, -Lo, /tmp/helm.tar.gz, https://get.helm.sh/helm-v{{ helm_ver }}-linux-amd64.tar.gz ]
         - [ tar, -C, /tmp, -xzf, /tmp/helm.tar.gz ]
         - [ cp, /tmp/linux-amd64/helm, /usr/bin/helm ]
         - [ chmod, '0755', /usr/bin/kubectl ]
-        - [ sh, -c, "echo 'source .adminrc' >> /root/.bashrc" ]
-        - [ mkdir, /root/.kube ]
-        - [ sh, -c, ". /root/.adminrc && openstack coe cluster config --dir=/root/.kube {{ k8s_cluster_name }}" ]
-        - [ chmod, '0400', /root/.kube/config ]
+        - [ sh, -c, "echo 'source .memberrc' >> /home/debian/.bash_profile" ]
+        - [ mkdir, /home/debian/.kube ]
+        - [ sh, -c, ". /home/debian/.adminrc && openstack coe cluster config --dir=/home/debian/.kube {{ k8s_cluster_name }}" ]
+        - [ chmod, '0400', /home/debian/.kube/config ]
+        - [ chown, -R, 'debian:debian', /home/debian ]
+        - [ sh, -c, "kubectl --kubeconfig=/home/debian/.kube/config apply -f /home/debian/post_install.yml" ]
+        - [ rm, -f, /home/debian/.adminrc ]
+        - [ rm, -f, /home/debian/post_install.yml ]
   delegate_to: "{{ groups['controller'][0] }}"
   run_once: true
 ...

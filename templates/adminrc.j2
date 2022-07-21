@@ -1,0 +1,9 @@
+export OS_PROJECT_DOMAIN_NAME=default
+export OS_USER_DOMAIN_NAME=default
+export OS_PROJECT_NAME={{ k8s_cluster_name }}
+export OS_USERNAME={{ k8s_cluster_users | json_query("[?role=='admin'].name") | join('') }}
+export OS_PASSWORD={{ k8s_cluster_users | json_query("[?role=='admin'].password") | join('') }}
+export OS_AUTH_URL=http://{{ keepalived_vip_svc | ternary(keepalived_vip_svc, keepalived_vip) }}:{{ keystone_port }}/v3
+export OS_IDENTITY_API_VERSION=3
+export OS_IMAGE_API_VERSION=2
+export PS1='\u@\h \w({{ k8s_cluster_name }}_admin)\$ '
