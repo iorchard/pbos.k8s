@@ -28,22 +28,13 @@
       - {name: "{{ k8s_cluster_name }}_member", password: "{{ member_password }}", role: "member"}
       - {name: "{{ k8s_cluster_name }}_reader", password: "{{ reader_password }}", role: "reader"}
 
-- name: Setup | delete users for the project if exist
-  openstack.cloud.identity_user:
-    cloud: pbos
-    state: absent
-    name: "{{ item.name }}"
-  loop: "{{ k8s_cluster_users }}"
-  delegate_to: "{{ groups['controller'][0] }}"
-  run_once: true
-  no_log: true
-
 - name: Setup | create users for the project
   openstack.cloud.identity_user:
     cloud: pbos
     state: present
     name: "{{ item.name }}"
     password: "{{ item.password }}"
+    update_password: always
     domain: default
     default_project: "{{ k8s_cluster_name }}"
   loop: "{{ k8s_cluster_users }}"
