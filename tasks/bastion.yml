@@ -78,6 +78,51 @@
   delegate_to: "{{ groups['controller'][0] }}"
   run_once: true
 
+- name: Bastion | templating coredns_append 
+  ansible.builtin.template:
+    dest: "{{ ansible_env.HOME }}/.{{ k8s_cluster_name }}.coredns_append"
+    src: "coredns_append.j2"
+    mode: "0600"
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | read coredns_append
+  ansible.builtin.slurp:
+    src: "{{ ansible_env.HOME }}/.{{ k8s_cluster_name }}.coredns_append"
+  register: coredns_append
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | templating coredns_configmap yaml manifest
+  ansible.builtin.template:
+    dest: "{{ ansible_env.HOME }}/.{{ k8s_cluster_name }}.coredns_configmap.yml"
+    src: "coredns_configmap.yml.j2"
+    mode: "0600"
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | read coredns_configmap.yml
+  ansible.builtin.slurp:
+    src: "{{ ansible_env.HOME }}/.{{ k8s_cluster_name }}.coredns_configmap.yml"
+  register: coredns_configmap
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | templating post_run.sh
+  ansible.builtin.template:
+    dest: "{{ ansible_env.HOME }}/.{{ k8s_cluster_name }}.post_run.sh"
+    src: "post_run.sh.j2"
+    mode: "0755"
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | read post_run.sh
+  ansible.builtin.slurp:
+    src: "{{ ansible_env.HOME }}/.{{ k8s_cluster_name }}.post_run.sh"
+  register: post_run
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
 - name: Bastion | read public adminrc
   ansible.builtin.slurp:
     src: "{{ ansible_env.HOME }}/.{{ k8s_cluster_name }}.adminrc"
@@ -182,20 +227,20 @@
         content: |
           {{ post_install.content | b64decode | indent(width=4) }}
         permissions: '0400'
+      - path: /home/debian/coredns_configmap.yml
+        content: |
+          {{ coredns_configmap.content | b64decode | indent(width=4) }}
+        permissions: '0644'
+      - path: /home/debian/coredns_append
+        content: |
+          {{ coredns_append.content | b64decode | indent(width=4) }}
+        permissions: '0644'
+      - path: /home/debian/post_run.sh
+        content: |
+          {{ post_run.content | b64decode | indent(width=4) }}
+        permissions: '0755'
       runcmd:
-        - [ curl, -Lo, /usr/bin/kubectl, https://storage.googleapis.com/kubernetes-release/release/v{{ k8s_ver }}/bin/linux/amd64/kubectl ]
-        - [ curl, -Lo, /tmp/helm.tar.gz, https://get.helm.sh/helm-v{{ helm_ver }}-linux-amd64.tar.gz ]
-        - [ tar, -C, /tmp, -xzf, /tmp/helm.tar.gz ]
-        - [ cp, /tmp/linux-amd64/helm, /usr/bin/helm ]
-        - [ chmod, '0755', /usr/bin/kubectl ]
-        - [ sh, -c, "echo 'source .memberrc' >> /home/debian/.bash_profile" ]
-        - [ mkdir, /home/debian/.kube ]
-        - [ sh, -c, ". /home/debian/.adminrc && openstack coe cluster config --dir=/home/debian/.kube {{ k8s_cluster_name }}" ]
-        - [ chmod, '0400', /home/debian/.kube/config ]
-        - [ chown, -R, 'debian:debian', /home/debian ]
-        - [ sh, -c, "kubectl --kubeconfig=/home/debian/.kube/config apply -f /home/debian/post_install.yml" ]
-        - [ rm, -f, /home/debian/.adminrc ]
-        - [ rm, -f, /home/debian/post_install.yml ]
+        - [ /home/debian/post_run.sh ]
   delegate_to: "{{ groups['controller'][0] }}"
   run_once: true
 ...

@@ -13,6 +13,8 @@ k8s_cluster:
     - {name: 'memberrc.j2', dest: "{{ ansible_env.HOME }}/.{{ k8s_cluster_name }}.memberrc"}
     - {name: 'readerrc.j2', dest: "{{ ansible_env.HOME }}/.{{ k8s_cluster_name }}.readerrc"}
 os_cloud: "pbos-{{ k8s_cluster_name }}-admin"
+# if designate is installed, dns_zone_name is added in k8s coredns configmap.
+dns_zone: "{{ k8s_cluster_name }}.local."
 
 enable_bastion: true
 k8s_ver: 1.21.11

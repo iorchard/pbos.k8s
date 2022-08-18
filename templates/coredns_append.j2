@@ -1,0 +1,7 @@
+{{ dns_zone }}:53 {
+    errors
+    log stdout
+    cache 30
+    forward . {{ keepalived_vip_svc | ternary(keepalived_vip_svc, keepalived_vip) }}
+    reload
+}

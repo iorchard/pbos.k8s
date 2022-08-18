@@ -124,4 +124,17 @@
     public_key_file: "{{ k8s_sshkey_dir }}/{{ k8s_cluster_name }}_key.pub"
   delegate_to: "{{ groups['controller'][0] }}"
   run_once: true
+
+- name: Setup | create dns zone
+  openstack.cloud.dns_zone:
+    cloud: "{{ os_cloud }}"
+    state: present
+    name: "{{ dns_zone }}"
+    zone_type: primary
+    email: "dnsmaster@{{ dns_zone[:-1] }}"
+    ttl: 3600
+    timeout: 300
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
 ...
+
