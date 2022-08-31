@@ -4,6 +4,7 @@
     cloud: pbos
     state: present
     name: "{{ k8s_cluster_name }}"
+    domain_id: default
     description: "Project for {{ k8s_cluster_name }} cluster"
     enabled: True
   delegate_to: "{{ groups['controller'][0] }}"

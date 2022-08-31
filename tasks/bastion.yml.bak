@@ -1,0 +1,242 @@
+---
+- name: Bastion | check bastion image exists
+  ansible.builtin.stat:
+    path: "/tmp/{{ bastion.image_name }}"
+  register: image_result
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | download bastion image
+  ansible.builtin.get_url:
+    url: "{{ bastion.image_url }}"
+    dest: "/tmp/{{ bastion.image_name }}"
+    mode: "0644"
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+  when: not image_result.stat.exists
+
+- name: Bastion | create bastion image
+  openstack.cloud.image:
+    cloud: "{{ os_cloud }}"
+    name: "{{ bastion.image_name }}"
+    disk_format: "{{ bastion.image_disk_format }}"
+    container_format: bare
+    filename: "/tmp/{{ bastion.image_name }}"
+    properties: "{{ bastion.image_properties }}"
+    state: present
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | create security group
+  openstack.cloud.security_group:
+    cloud: "{{ os_cloud }}"
+    state: present
+    name: "{{ bastion.secgroup }}"
+    description: security group for bastion server
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | create security group rules
+  openstack.cloud.security_group_rule:
+    cloud: "{{ os_cloud }}"
+    state: present
+    security_group: "{{ bastion.secgroup }}"
+    protocol: "{{ item.protocol }}"
+    port_range_min: "{{ item.port_range_min }}"
+    port_range_max: "{{ item.port_range_max }}"
+    remote_ip_prefix: "{{ item.remote_ip_prefix }}"
+  loop: "{{ bastion.secgroup_rules }}"
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | create flavor
+  openstack.cloud.compute_flavor:
+    cloud: "{{ os_cloud }}"
+    state: present
+    name: "{{ bastion.flavor.name }}"
+    vcpus: "{{ bastion.flavor.vcpus }}"
+    ram: "{{ bastion.flavor.ram }}"
+    disk: "{{ bastion.flavor.disk }}"
+    is_public: false
+    extra_specs:
+      "aggregate_instance_extra_specs:k8s": "true"
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | templating post_install yaml manifest
+  ansible.builtin.template:
+    dest: "{{ ansible_env.HOME }}/.{{ k8s_cluster_name }}.post_install.yml"
+    src: "post_install.yml.j2"
+    mode: "0600"
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | read post_install yaml
+  ansible.builtin.slurp:
+    src: "{{ ansible_env.HOME }}/.{{ k8s_cluster_name }}.post_install.yml"
+  register: post_install
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | templating coredns_append 
+  ansible.builtin.template:
+    dest: "{{ ansible_env.HOME }}/.{{ k8s_cluster_name }}.coredns_append"
+    src: "coredns_append.j2"
+    mode: "0600"
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | read coredns_append
+  ansible.builtin.slurp:
+    src: "{{ ansible_env.HOME }}/.{{ k8s_cluster_name }}.coredns_append"
+  register: coredns_append
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | templating coredns_configmap yaml manifest
+  ansible.builtin.template:
+    dest: "{{ ansible_env.HOME }}/.{{ k8s_cluster_name }}.coredns_configmap.yml"
+    src: "coredns_configmap.yml.j2"
+    mode: "0600"
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | read coredns_configmap.yml
+  ansible.builtin.slurp:
+    src: "{{ ansible_env.HOME }}/.{{ k8s_cluster_name }}.coredns_configmap.yml"
+  register: coredns_configmap
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | read public adminrc
+  ansible.builtin.slurp:
+    src: "{{ ansible_env.HOME }}/.{{ k8s_cluster_name }}.adminrc"
+  register: adminrc_public
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | read public memberrc
+  ansible.builtin.slurp:
+    src: "{{ ansible_env.HOME }}/.{{ k8s_cluster_name }}.memberrc"
+  register: memberrc_public
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | get network id of cluster
+  openstack.cloud.networks_info:
+    cloud: "{{ os_cloud }}"
+    name: "{{ k8s_cluster_name }}"
+  register: network_result
+  until: (network_result.openstack_networks | length) != 0
+  retries: 10
+  delay: 10
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | check k8s cluster status.
+  ansible.builtin.command: >-
+    openstack --os-cloud={{ os_cloud }} coe cluster show {{ k8s_cluster_name }} -c status -f value
+  changed_when: false
+  register: cluster_status
+  until: cluster_status.stdout == 'CREATE_COMPLETE'
+  retries: 60
+  delay: 30
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+
+- name: Bastion | create bastion instance
+  openstack.cloud.server:
+    cloud: "{{ os_cloud  }}"
+    state: present
+    name: "{{ bastion.name }}"
+    image: "{{ bastion.image_name }}"
+    boot_from_volume: true
+    volume_size: 80
+    key_name: "{{ bastion.key_name }}"
+    timeout: 300
+    flavor: "{{ bastion.flavor.name }}"
+    security_groups: "{{ bastion.secgroup }}"
+    nics:
+      - net-id: "{{ network_result.openstack_networks[0].id }}"
+    auto_ip: true
+    userdata: |
+      #cloud-config
+      timezone: {{ bastion.timezone }}
+      bootcmd:
+        - DEBIAN_FRONTEND=noninteractive apt-get -q=2 update
+        - DEBIAN_FRONTEND=noninteractive apt-get -q=2 install gnupg
+      apt:
+        preseve_sources_list: false
+        primary:
+        - arches:
+          - amd64
+          uri: 'http://ftp.kr.debian.org/debian'
+        security:
+        - arches:
+          - amd64
+          uri: 'http://security.debian.org/debian-security'
+        sources_list: |
+          deb $PRIMARY $RELEASE main
+          deb $PRIMARY $RELEASE-updates main
+          deb $SECURITY $RELEASE-security main
+        sources:
+          openstack:
+            keyid: '0FB8E8DD19498FEC90B25E5E56056AB2FEE4EECB'
+            keyserver: 'http://osbpo.debian.net/osbpo/dists/pubkey.gpg'
+            source: 'deb http://osbpo.debian.net/osbpo $RELEASE-{{ openstack_release }}-backports main'
+            filename: openstack.list
+          openstack-nochange:
+            source: 'deb http://osbpo.debian.net/osbpo $RELEASE-{{ openstack_release }}-backports-nochange main'
+            filename: openstack.list
+      packages:
+        - python3-openstackclient
+        - python3-barbicanclient
+        - python3-heatclient
+        - python3-magnumclient
+        - python3-octaviaclient
+      package_update: true
+      write_files:
+      - path: /home/debian/.ssh/id_rsa
+        content: |
+          {{ ssh_private_key.content | b64decode | indent(width=4) }}
+        permissions: '0400'
+      - path: /home/debian/.adminrc
+        content: |
+          {{ adminrc_public.content | b64decode | indent(width=4) }}
+        permissions: '0600'
+      - path: /home/debian/.memberrc
+        content: |
+          {{ memberrc_public.content | b64decode | indent(width=4) }}
+        permissions: '0600'
+      - path: /home/debian/post_install.yml
+        content: |
+          {{ post_install.content | b64decode | indent(width=4) }}
+        permissions: '0400'
+      - path: /home/debian/coredns_configmap.yml
+        content: |
+          {{ coredns_configmap.content | b64decode | indent(width=4) }}
+        permissions: '0644'
+      - path: /home/debian/coredns_append
+        content: |
+          {{ coredns_append.content | b64decode | indent(width=4) }}
+        permissions: '0644'
+      runcmd:
+        - [ curl, -Lo, /usr/bin/kubectl, https://storage.googleapis.com/kubernetes-release/release/v{{ k8s_ver }}/bin/linux/amd64/kubectl ]
+        - [ curl, -Lo, /tmp/helm.tar.gz, https://get.helm.sh/helm-v{{ helm_ver }}-linux-amd64.tar.gz ]
+        - [ tar, -C, /tmp, -xzf, /tmp/helm.tar.gz ]
+        - [ cp, /tmp/linux-amd64/helm, /usr/bin/helm ]
+        - [ chmod, '0755', /usr/bin/kubectl ]
+        - [ sh, -c, "echo 'source .memberrc' >> /home/debian/.bash_profile" ]
+        - [ mkdir, /home/debian/.kube ]
+        - [ sh, -c, ". /home/debian/.adminrc && openstack coe cluster config --dir=/home/debian/.kube {{ k8s_cluster_name }}" ]
+        - [ chmod, '0400', /home/debian/.kube/config ]
+        - [ chown, -R, 'debian:debian', /home/debian ]
+        - [ sh, -xc, "kubectl --kubeconfig=/home/debian/.kube/config apply -f /home/debian/post_install.yml" ]
+        - [ sh, -xc, "kubectl --kubeconfig=/home/debian/.kube/config get cm coredns -n kube-system -o jsonpath='{.data.Corefile}' | sed 's/^/    /' >> /home/debian/coredns_configmap.yml" ]
+        - [ sh, -xc "sed 's/^/    /' /home/debian/coredns_append >> /home/debian/coredns_configmap.yml" ]
+        - [ sh, -xc "kubectl --kubeconfig=/home/debian/.kube/config apply -f /home/debian/coredns_configmap.yml" ]
+        - [ rm, -f, /home/debian/.adminrc ]
+        - [ rm, -f, /home/debian/post_install.yml ]
+  delegate_to: "{{ groups['controller'][0] }}"
+  run_once: true
+...
