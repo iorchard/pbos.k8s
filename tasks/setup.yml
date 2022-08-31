@@ -26,7 +26,7 @@
 - name: Setup | create fedora coreos image
   openstack.cloud.image:
     cloud: pbos
-    name: fcos
+    name: "{{ k8s_template.image_id }}"
     disk_format: qcow2
     container_format: bare
     filename: "/tmp/fcos.qcow2"
